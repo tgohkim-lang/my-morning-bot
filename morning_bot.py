@@ -4,37 +4,38 @@ import asyncio
 import os
 import requests
 
-# GitHub Secrets에서 가져오기 (절대 실제 값을 여기에 적지 마세요!)
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 CHAT_ID = os.getenv('CHAT_ID')
 
 async def get_weather():
-    """대구 날씨 정보를 가져오고 깨진 문자를 정리합니다."""
+    """대구 날씨 정보를 가져오고 한글 인코딩 문제를 해결합니다."""
     try:
-        # 대구(Daegu) 날씨, 언어는 한국어(lang=ko)로 설정
+        # 인코딩 문제를 피하기 위해 영문으로 가져온 뒤 핵심만 추출하거나, 직접 인코딩을 지정합니다.
         url = "https://wttr.in/Daegu?format=%C+%t&lang=ko"
         response = requests.get(url, timeout=10)
-        # 깨진 온도 표시(Â°)를 정상적인 °로 치환
+        response.encoding = 'utf-8' # 한글 깨짐 방지 강제 설정
         weather_text = response.text.strip().replace("Â", "")
         return weather_text
     except: return "확인 불가"
 
 async def get_cnn_fear_greed():
-    """CNN Fear & Greed Index를 더 튼튼한 경로로 가져옵니다."""
+    """CNN 지수가 계속 막힐 경우를 대비해, 더 유연한 방식으로 가져옵니다."""
     try:
-        # 브라우저처럼 보이게 헤더를 강화하여 차단을 피합니다.
+        # CNN에서 직접 제공하는 데이터 주소입니다.
         url = "https://production.dataviz.cnn.io/index/feargreed/static/daily"
+        # 깃허브 서버임을 숨기기 위해 더 정교한 헤더를 사용합니다.
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Accept': 'application/json'
         }
         response = requests.get(url, headers=headers, timeout=15)
-        data = response.json()
-        score = int(data['now']['value'])
-        rating = data['now']['value_text']
-        
-        # 점수에 따라 직관적인 이모지 추가
-        emoji = "😱" if score < 30 else "😨" if score < 45 else "😐" if score < 55 else "😊" if score < 75 else "🤑"
-        return f"{score} ({rating}) {emoji}"
+        if response.status_code == 200:
+            data = response.json()
+            score = int(data['now']['value'])
+            rating = data['now']['value_text']
+            return f"{score} ({rating})"
+        else:
+            return "CNN 서버 응답 지연"
     except: 
         return "조회 일시 중단"
 
@@ -54,7 +55,6 @@ async def get_market_data():
             current = data['Close'].iloc[-1]
             prev = data['Close'].iloc[-2]
             change = ((current - prev) / prev) * 100
-            # 상승/하락에 따른 이모지 설정
             mark = "🔺" if change > 0 else "🔹"
             results[name] = f"{current:,.2f} ({mark}{abs(change):.2f}%)"
         except:
@@ -62,15 +62,12 @@ async def get_market_data():
     return results
 
 async def main():
-    if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("에러: Secrets 설정이 되어있지 않습니다.")
-        return
-
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     weather = await get_weather()
     cnn_index = await get_cnn_fear_greed()
     market = await get_market_data()
     
+    # 메시지 가독성을 높이기 위해 디자인 수정
     message = (
         f"☀️ **경제 비서 아침 브리핑**\n\n"
         f"📍 **대구 날씨:** `{weather}`\n"
