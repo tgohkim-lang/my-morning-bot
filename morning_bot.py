@@ -4,53 +4,44 @@ import asyncio
 import os
 import requests
 
-# GitHub Secrets에서 안전하게 가져오기
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 CHAT_ID = os.getenv('CHAT_ID')
 
 async def get_weather():
-    """대구 날씨 정보를 가져오고 한글 인코딩을 처리합니다."""
     try:
-        # 가독성을 위해 구분자(|) 추가
         url = "https://wttr.in/Daegu?format=%C+|+온도:%t+|+체감:%f&lang=ko"
         response = requests.get(url, timeout=10)
         response.encoding = 'utf-8'
         return response.text.strip().replace("Â", "")
-    except:
-        return "날씨 정보 확인 불가"
+    except: return "정보 확인 불가"
 
-async def get_cnn_fear_greed():
-    """CNN 공포지수를 가져오되, 실패 시 VIX 지수로 자동 대체합니다."""
+async def get_market_sentiment():
+    """CNN 공포지수 시도 후, 실패 시 VIX 지수로 전환하여 직관적 메시지 반환"""
     try:
+        # 1차 시도: CNN Fear & Greed
         url = "https://production.dataviz.cnn.io/index/feargreed/static/daily"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            'Accept': 'application/json'
-        }
+        headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=10)
         data = response.json()
         score = int(data['now']['value'])
         rating = data['now']['value_text']
         
-        # 공포 단계(45 이하)일 때 사이렌 이모지와 굵게 강조
+        # CNN은 점수가 낮을수록(45 이하) 공포
         if score <= 45:
-            return f"🚨 **{score} ({rating})**"
-        return f"{score} ({rating})"
+            return f"🚨 **CNN {score} ({rating}) - 시장 공포**"
+        return f"✅ CNN {score} ({rating}) - 시장 안정"
     except:
         try:
-            # CNN 차단 시 야후 파이낸스에서 VIX 지수 추출
-            vix_ticker = yf.Ticker("^VIX")
-            vix_data = vix_ticker.history(period="1d")
-            vix_score = vix_data['Close'].iloc[-1]
-            # VIX가 20 이상이면 시장 공포 상태로 간주
-            if vix_score >= 20:
-                return f"🚨 **{vix_score:.2f} (VIX 공포)**"
-            return f"{vix_score:.2f} (VIX 안정)"
+            # 2차 시도: VIX (CNN 차단 시)
+            vix = yf.Ticker("^VIX").history(period="1d")['Close'].iloc[-1]
+            # VIX는 점수가 높을수록(20 이상) 공포
+            if vix >= 20:
+                return f"🚨 **VIX {vix:.2f} - 변동성 높음 (주의)**"
+            return f"✅ VIX {vix:.2f} - 변동성 낮음 (안정)"
         except:
-            return "지수 조회 일시 중단"
+            return "지수 조회 불가"
 
 async def get_market_data():
-    """환율, 국채 금리 및 미국 3대 지수의 등락폭을 계산합니다."""
     indices = {
         "환율": "KRW=X",
         "미 국채 10년물": "^TNX",
@@ -67,36 +58,27 @@ async def get_market_data():
             prev = data['Close'].iloc[-2]
             diff = current - prev
             change_pct = (diff / prev) * 100
-            
             mark = "🔺" if diff > 0 else "🔹"
             
             if "국채" in name:
-                # 금리는 소수점 2자리 %로 표시
                 results[name] = f"{current:.2f}% ({mark}{abs(diff):.2f})"
             elif "환율" in name:
                 results[name] = f"{current:,.2f}원 ({mark}{abs(diff):.2f}원)"
             else:
-                # 지수는 포인트 등락과 퍼센트 함께 표시
                 results[name] = f"{current:,.2f} ({mark}{abs(diff):.2f} / {change_pct:+.2f}%)"
-        except:
-            results[name] = "조회 불가"
+        except: results[name] = "조회 불가"
     return results
 
 async def main():
-    if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("에러: TELEGRAM_TOKEN 또는 CHAT_ID가 설정되지 않았습니다.")
-        return
-
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     weather = await get_weather()
-    fear_index = await get_cnn_fear_greed()
+    sentiment = await get_market_sentiment()
     market = await get_market_data()
     
-    # 메시지 레이아웃 구성
     message = (
         f"☀️ **경제 비서 아침 브리핑**\n\n"
         f"📍 **대구 날씨:** `{weather}`\n"
-        f"🧭 **시장 공포지수:** {fear_index}\n"
+        f"🧭 **시장 위험도:** {sentiment}\n"
         f"━━━━━━━━━━━━━━\n"
         f"💵 **금융 지표**\n"
         f"· 환율: `{market['환율']}`\n"
@@ -107,7 +89,7 @@ async def main():
         f"· S&P500: `{market['S&P 500']}`\n"
         f"· 나스닥: `{market['나스닥']}`\n"
         f"━━━━━━━━━━━━━━\n\n"
-        f"오늘도 성공적인 투자와 활기찬 하루 되세요! 🍀"
+        f"오늘도 성공적인 투자와 하루 되세요! 🍀"
     )
     
     async with bot:
