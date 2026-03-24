@@ -4,8 +4,8 @@ import asyncio
 import os
 import requests
 
-TELEGRAM_TOKEN = os.getenv('8632215729:AAFYJgpBnJ5Jq5FSzVb05X1BfeR2MoUyWkI')
-CHAT_ID = os.getenv('165044932')
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+CHAT_ID = os.getenv('CHAT_ID')
 
 async def get_weather():
     try:
