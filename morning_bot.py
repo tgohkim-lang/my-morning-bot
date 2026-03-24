@@ -13,29 +13,36 @@ async def get_weather():
         response = requests.get(url, timeout=10)
         response.encoding = 'utf-8'
         return response.text.strip().replace("Â", "")
-    except: return "날씨 확인 불가"
+    except: return "확인 불가"
 
-async def get_vix_index():
-    """VIX 지수를 가져오고 상태에 따라 강조 기호를 붙입니다."""
+async def get_cnn_fear_greed():
+    """블로그에서 참조한 API 방식으로 CNN 공포지수를 가져옵니다."""
     try:
-        vix = yf.Ticker("^VIX").history(period="2d")
-        current = vix['Close'].iloc[-1]
-        prev = vix['Close'].iloc[-2]
-        diff = current - prev
+        url = "https://production.dataviz.cnn.io/index/feargreed/static/daily"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+        }
+        response = requests.get(url, headers=headers, timeout=15)
+        data = response.json()
+        
+        score = int(data['now']['value'])
+        rating = data['now']['value_text']
+        prev_close = int(data['previous_close']['value'])
+        diff = score - prev_close
         mark = "🔺" if diff > 0 else "🔹"
         
-        # 공포 상태(보통 20~25 이상)일 때 굵게 강조 및 이모지 변경
-        status_msg = f"{current:.2f} ({mark}{abs(diff):.2f})"
-        if current >= 20:
-            return f"🚨 **{status_msg} (공포 주의)**"
-        return f"😊 {status_msg} (안정)"
-    except: return "조회 불가"
+        # 🟢 공포 단계(45 이하)일 때 🚨 기호와 굵은 글씨로 강조
+        status_msg = f"{score} ({rating}) [{mark}{abs(diff)}]"
+        if score <= 45:
+            return f"🚨 **{status_msg} (시장 공포)**"
+        return f"😊 {status_msg}"
+    except:
+        return "조회 일시 중단 (VIX 대체 권장)"
 
 async def get_market_data():
-    """환율, 국채 금리 및 미국 3대 지수를 가져옵니다."""
     indices = {
         "환율": "KRW=X",
-        "미 국채 10년물": "^TNX", # 10년물 국채 금리 티커
+        "미 국채 10년물": "^TNX",
         "다우존스": "^DJI",
         "S&P 500": "^GSPC",
         "나스닥": "^IXIC"
@@ -49,33 +56,30 @@ async def get_market_data():
             prev = data['Close'].iloc[-2]
             diff = current - prev
             change_pct = (diff / prev) * 100
-            
             mark = "🔺" if diff > 0 else "🔹"
             
             if "국채" in name:
-                # 국채 금리는 % 단위로 표시
                 results[name] = f"{current:.2f}% ({mark}{abs(diff):.2f})"
             elif "환율" in name:
                 results[name] = f"{current:,.2f}원 ({mark}{abs(diff):.2f})"
             else:
                 results[name] = f"{current:,.2f} ({mark}{abs(diff):.2f} / {change_pct:+.2f}%)"
-        except:
-            results[name] = "조회 불가"
+        except: results[name] = "조회 불가"
     return results
 
 async def main():
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     weather = await get_weather()
-    vix = await get_vix_index()
+    cnn_fear = await get_cnn_fear_greed()
     market = await get_market_data()
     
     message = (
         f"☀️ **경제 비서 아침 브리핑**\n\n"
         f"📍 **대구 날씨:** `{weather}`\n"
-        f"🧭 **시장 공포지수(VIX):** {vix}\n"
+        f"🧭 **CNN 공포지수:** {cnn_fear}\n"
         f"━━━━━━━━━━━━━━\n"
         f"💵 **금융 지표**\n"
-        f"· 환율: `{market['환율']}`\n"
+        f"· 환율: `{market['환율']}`원\n"
         f"· 미 10년물 국채금리: `{market['미 국채 10년물']}`\n"
         f"━━━━━━━━━━━━━━\n"
         f"🇺🇸 **미국 3대 증시 마감**\n"
