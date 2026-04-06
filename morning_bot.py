@@ -16,7 +16,7 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-# 3. 구독 채널 목록 (수페TV, 서대리TV, 마경환 추가)
+# 3. 구독 채널 목록
 YOUTUBE_CHANNELS = {
     "수페TV": "UC38B_9K2LzEunN2y8a80uMw",
     "서대리TV": "UCtQkxwZkrruYdy2bVNNW-Rw",
@@ -50,33 +50,39 @@ async def get_gemini_summary(title, description):
     except: return "AI 요약 생성 중 오류가 발생했습니다."
 
 async def get_latest_youtube_brief():
-    """최근 24시간 이내의 영상만 필터링하여 요약"""
+    """채널의 최신 영상 목록을 직접 확인하여 24시간 이내 영상만 필터링합니다."""
     briefs = []
-    # YouTube API 표준 시간 형식 (ISO 8601)
-    time_threshold = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime('%Y-%m-%dT%H:%M:%SZ')
-
+    now = datetime.now(timezone.utc)
+    
     for name, channel_id in YOUTUBE_CHANNELS.items():
         try:
-            search_url = (
-                f"https://www.googleapis.com/youtube/v3/search?"
-                f"key={YOUTUBE_API_KEY}&channelId={channel_id}&part=snippet&"
-                f"order=date&maxResults=1&type=video&publishedAfter={time_threshold}"
+            # search 대신 activities API를 사용하여 채널의 실제 최근 활동(업로드)을 가져옵니다. (더 정확함)
+            url = (
+                f"https://www.googleapis.com/youtube/v3/activities?"
+                f"key={YOUTUBE_API_KEY}&channelId={channel_id}&part=snippet,contentDetails&"
+                f"maxResults=5"
             )
-            res = requests.get(search_url).json()
+            res = requests.get(url).json()
             
-            if 'items' in res and len(res['items']) > 0:
-                video = res['items'][0]
-                v_id = video['id']['videoId']
-                v_title = video['snippet']['title']
-                
-                # 상세 설명 가져오기
-                v_url = f"https://www.googleapis.com/youtube/v3/videos?key={YOUTUBE_API_KEY}&id={v_id}&part=snippet"
-                v_info = requests.get(v_url).json()
-                v_desc = v_info['items'][0]['snippet']['description']
-                v_full_url = f"https://youtu.be/{v_id}"
+            for item in res.get('items', []):
+                if item['snippet']['type'] == 'upload':
+                    pub_at = item['snippet']['publishedAt']
+                    pub_time = datetime.strptime(pub_at, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
+                    
+                    # 24시간 이내 업로드된 영상인지 확인
+                    if now - pub_time <= timedelta(hours=24):
+                        v_id = item['contentDetails']['upload']['videoId']
+                        v_title = item['snippet']['title']
+                        
+                        # 상세 설명 가져오기
+                        v_detail_url = f"https://www.googleapis.com/youtube/v3/videos?key={YOUTUBE_API_KEY}&id={v_id}&part=snippet"
+                        v_info = requests.get(v_detail_url).json()
+                        v_desc = v_info['items'][0]['snippet']['description']
+                        v_full_url = f"https://youtu.be/{v_id}"
 
-                summary = await get_gemini_summary(v_title, v_desc)
-                briefs.append(f"📺 **{name} 새 영상**\n📌 {v_title}\n{summary}\n🔗 [영상 바로가기]({v_full_url})")
+                        summary = await get_gemini_summary(v_title, v_desc)
+                        briefs.append(f"📺 **{name} 새 영상**\n📌 {v_title}\n{summary}\n🔗 [영상 바로가기]({v_full_url})")
+                        break # 각 채널당 가장 최근 1개만
         except:
             continue
             
