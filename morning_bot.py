@@ -5,7 +5,7 @@ import os
 import requests
 import google.generativeai as genai
 
-# 1. 환경 변수 설정 (GitHub Secrets에서 가져오기)
+# 1. 환경 변수 설정 (GitHub Secrets에서 안전하게 가져오기)
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 CHAT_ID = os.getenv('CHAT_ID')
 YOUTUBE_API_KEY = os.getenv('YOUTUBE_API_KEY')
@@ -15,18 +15,21 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-# 3. 분석할 유튜브 채널 정보 (수페TV)
+# 3. 구독할 유튜버 정보 (채널 ID: 수페TV)
 YOUTUBE_CHANNELS = {
     "수페TV": "UC38B_9K2LzEunN2y8a80uMw"
 }
 
 async def get_weather():
+    """대구 날씨 조회 (섭씨 온도로 표시)"""
     try:
-        url = "https://wttr.in/Daegu?format=%C+|+온도:%t+|+체감:%f&lang=ko"
+        # 끝에 &m을 붙여 섭씨(C)로 강제 지정합니다.
+        url = "https://wttr.in/Daegu?format=%C+|+온도:%t+|+체감:%f&lang=ko&m"
         response = requests.get(url, timeout=10)
         response.encoding = 'utf-8'
         return response.text.strip().replace("Â", "")
-    except: return "정보 확인 불가"
+    except:
+        return "날씨 정보 확인 불가"
 
 async def get_market_sentiment():
     """시장 위험도 측정 (VIX 활용)"""
@@ -35,7 +38,8 @@ async def get_market_sentiment():
         if vix >= 20:
             return f"🚨 **VIX {vix:.2f} - 변동성 높음 (주의)**"
         return f"✅ VIX {vix:.2f} - 변동성 낮음 (안정)"
-    except: return "지수 조회 불가"
+    except:
+        return "지수 조회 불가"
 
 async def get_gemini_summary(title, description):
     """Gemini AI를 활용한 3줄 핵심 요약"""
@@ -43,6 +47,7 @@ async def get_gemini_summary(title, description):
         prompt = f"""
         당신은 전문 경제 비서입니다. 아래 유튜브 영상의 제목과 설명을 바탕으로 
         바쁜 직장인이 핵심만 파악할 수 있게 한국어로 3줄 요약해 주세요.
+        번호(1, 2, 3)를 붙여서 정리해 주세요.
         
         영상 제목: {title}
         영상 설명: {description}
@@ -53,17 +58,21 @@ async def get_gemini_summary(title, description):
         return "AI 요약 생성 중 오류가 발생했습니다."
 
 async def get_latest_youtube_brief():
-    """최신 영상을 검색하고 요약본을 생성합니다."""
+    """채널의 업로드 목록을 직접 조회하여 가장 최신 영상을 가져옵니다."""
     briefs = []
     for name, channel_id in YOUTUBE_CHANNELS.items():
         try:
-            url = f"https://www.googleapis.com/youtube/v3/search?key={YOUTUBE_API_KEY}&channelId={channel_id}&part=snippet,id&order=date&maxResults=1&type=video"
-            res = requests.get(url).json()
-            video = res['items'][0]
+            # 채널 ID(UC...)를 업로드 재생목록 ID(UU...)로 변환하여 직접 접근
+            upload_playlist_id = "UU" + channel_id[2:]
+            url = f"https://www.googleapis.com/youtube/v3/playlistItems?key={YOUTUBE_API_KEY}&playlistId={upload_playlist_id}&part=snippet&maxResults=1"
             
-            v_title = video['snippet']['title']
-            v_desc = video['snippet']['description']
-            v_url = f"https://youtu.be/{video['id']['videoId']}"
+            res = requests.get(url).json()
+            video = res['items'][0]['snippet']
+            
+            v_title = video['title']
+            v_desc = video['description']
+            v_id = video['resourceId']['videoId']
+            v_url = f"https://youtu.be/{v_id}"
             
             # Gemini 요약 호출
             summary = await get_gemini_summary(v_title, v_desc)
@@ -74,6 +83,7 @@ async def get_latest_youtube_brief():
     return "\n\n".join(briefs) if briefs else "새로운 영상 정보가 없습니다."
 
 async def get_market_data():
+    """금융 지표 수집"""
     indices = {
         "환율": "KRW=X",
         "미 국채 10년물": "^TNX",
@@ -98,22 +108,24 @@ async def get_market_data():
                 results[name] = f"{current:,.2f}원 ({mark}{abs(diff):.2f}원)"
             else:
                 results[name] = f"{current:,.2f} ({mark}{abs(diff):.2f} / {change_pct:+.2f}%)"
-        except: results[name] = "조회 불가"
+        except:
+            results[name] = "조회 불가"
     return results
 
 async def main():
     if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("필수 설정 값이 부족합니다.")
+        print("필수 설정 값(토큰, ID)이 없습니다.")
         return
 
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     
-    # 데이터 수집
+    # 데이터 수집 실행
     weather = await get_weather()
     sentiment = await get_market_sentiment()
     youtube_section = await get_latest_youtube_brief()
     market = await get_market_data()
     
+    # 메시지 구성
     message = (
         f"☀️ **경제 비서 아침 브리핑**\n\n"
         f"📍 **대구 날씨:** `{weather}`\n"
