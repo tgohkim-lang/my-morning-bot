@@ -4,7 +4,7 @@ import asyncio
 import os
 import requests
 import google.generativeai as genai
-import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta, timezone
 
 # 1. 환경 변수 설정
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
@@ -42,39 +42,48 @@ async def get_market_sentiment():
 async def get_gemini_summary(title, description):
     """Gemini AI 3줄 요약"""
     try:
-        prompt = f"경제 유튜버의 영상이야. 제목과 설명을 보고 바쁜 직장인을 위해 핵심을 3줄 요약해줘.\n제목: {title}\n설명: {description}"
+        prompt = f"경제 유튜버의 영상이야. 제목과 설명을 보고 바쁜 직장인을 위해 핵심을 번호를 매겨 3줄 요약해줘.\n제목: {title}\n설명: {description}"
         response = model.generate_content(prompt)
         return response.text.strip()
     except: return "AI 요약 생성 중 오류가 발생했습니다."
 
 async def get_latest_youtube_brief():
-    """RSS Feed 방식을 사용하여 가장 확실하게 최신 영상을 가져옵니다."""
+    """봇 실행 시점 기준, 최근 24시간 이내에 올라온 영상만 요약합니다."""
     briefs = []
+    # 현재 시간 기준 24시간 전 시간 구하기 (RFC 3339 형식)
+    time_threshold = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+
     for name, channel_id in YOUTUBE_CHANNELS.items():
         try:
-            # 유튜브 RSS 피드 URL (가장 빠르고 정확함)
-            rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
-            response = requests.get(rss_url, timeout=10)
-            root = ET.fromstring(response.content)
+            # publishedAfter 파라미터를 사용하여 최근 24시간 이내 영상만 검색
+            search_url = (
+                f"https://www.googleapis.com/youtube/v3/search?"
+                f"key={YOUTUBE_API_KEY}&channelId={channel_id}&part=snippet&"
+                f"order=date&maxResults=1&type=video&publishedAfter={time_threshold}"
+            )
+            search_res = requests.get(search_url).json()
             
-            # 가장 첫 번째(최신) 영상 데이터 추출
-            entry = root.find('{http://www.w3.org/2005/Atom}entry')
-            if entry is not None:
-                v_title = entry.find('{http://www.w3.org/2005/Atom}title').text
-                v_url = entry.find('{http://www.w3.org/2005/Atom}link').attrib['href']
+            if 'items' in search_res and len(search_res['items']) > 0:
+                video = search_res['items'][0]
+                v_id = video['id']['videoId']
+                v_title = video['snippet']['title']
                 
-                # 상세 설명을 위해 API 한 번만 호출 (이미 ID가 있으므로 확실함)
-                v_id = v_url.split("v=")[1]
-                api_url = f"https://www.googleapis.com/youtube/v3/videos?key={YOUTUBE_API_KEY}&id={v_id}&part=snippet"
-                api_res = requests.get(api_url).json()
-                v_desc = api_res['items'][0]['snippet']['description'] if 'items' in api_res else "설명 없음"
+                # 영상 상세 설명 가져오기
+                video_url = f"https://www.googleapis.com/youtube/v3/videos?key={YOUTUBE_API_KEY}&id={v_id}&part=snippet"
+                video_res = requests.get(video_url).json()
+                v_desc = video_res['items'][0]['snippet']['description']
+                v_full_url = f"https://youtu.be/{v_id}"
 
                 summary = await get_gemini_summary(v_title, v_desc)
-                briefs.append(f"📺 **{name} 최신 영상**\n📌 {v_title}\n{summary}\n🔗 [영상 바로가기]({v_url})")
+                briefs.append(f"📺 **{name} 따끈따끈한 새 영상**\n📌 {v_title}\n{summary}\n🔗 [영상 바로가기]({v_full_url})")
+            else:
+                # 24시간 이내 영상이 없는 경우
+                continue
         except Exception as e:
             print(f"유튜브 에러: {e}")
             continue
-    return "\n\n".join(briefs) if briefs else "새로운 영상 정보가 없습니다."
+            
+    return "\n\n".join(briefs) if briefs else "최근 24시간 동안 올라온 새로운 영상 정보가 없습니다."
 
 async def get_market_data():
     """금융 지표 수집"""
