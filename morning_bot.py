@@ -16,14 +16,15 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-# 3. 구독 채널 목록 (수페TV & 서대리TV)
+# 3. 구독 채널 목록 (수페TV, 서대리TV, 마경환 추가)
 YOUTUBE_CHANNELS = {
     "수페TV": "UC38B_9K2LzEunN2y8a80uMw",
-    "서대리TV": "UCtQkxwZkrruYdy2bVNNW-Rw"
+    "서대리TV": "UCtQkxwZkrruYdy2bVNNW-Rw",
+    "마경환": "UC-vS_m_9vUInZ0XN2Yk20sw"
 }
 
 async def get_weather():
-    """대구 날씨 조회 (섭씨)"""
+    """대구 날씨 조회"""
     try:
         url = "https://wttr.in/Daegu?format=%C+|+온도:%t+|+체감:%f&lang=ko&m"
         response = requests.get(url, timeout=10)
@@ -49,9 +50,9 @@ async def get_gemini_summary(title, description):
     except: return "AI 요약 생성 중 오류가 발생했습니다."
 
 async def get_latest_youtube_brief():
-    """봇 실행 기준 최근 24시간 이내의 영상만 가져옵니다."""
+    """최근 24시간 이내의 영상만 필터링하여 요약"""
     briefs = []
-    # YouTube API용 24시간 전 시간 형식 (ISO 8601)
+    # YouTube API 표준 시간 형식 (ISO 8601)
     time_threshold = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime('%Y-%m-%dT%H:%M:%SZ')
 
     for name, channel_id in YOUTUBE_CHANNELS.items():
@@ -68,7 +69,7 @@ async def get_latest_youtube_brief():
                 v_id = video['id']['videoId']
                 v_title = video['snippet']['title']
                 
-                # 영상 상세 설명 가져오기
+                # 상세 설명 가져오기
                 v_url = f"https://www.googleapis.com/youtube/v3/videos?key={YOUTUBE_API_KEY}&id={v_id}&part=snippet"
                 v_info = requests.get(v_url).json()
                 v_desc = v_info['items'][0]['snippet']['description']
@@ -101,12 +102,9 @@ async def get_market_data():
     return results
 
 async def main():
-    if not TELEGRAM_TOKEN or not CHAT_ID:
-        return
-
+    if not TELEGRAM_TOKEN or not CHAT_ID: return
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     
-    # 각 정보 수집
     weather = await get_weather()
     sentiment = await get_market_sentiment()
     youtube_section = await get_latest_youtube_brief()
