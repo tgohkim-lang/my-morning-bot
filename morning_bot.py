@@ -16,171 +16,129 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-# 3. 구독 채널 목록
+# 3. 구독 채널 설정 (채널 ID -> 업로드 재생목록 ID로 자동 변환하여 사용)
 YOUTUBE_CHANNELS = {
     "수페TV": "UC38B_9K2LzEunN2y8a80uMw",
     "서대리TV": "UCtQkxwZkrruYdy2bVNNW-Rw",
     "마경환": "UC-vS_m_9vUInZ0XN2Yk20sw"
 }
 
-# -----------------------------
-# 날씨
-# -----------------------------
 async def get_weather():
+    """대구 날씨 조회"""
     try:
         url = "https://wttr.in/Daegu?format=%C+|+온도:%t+|+체감:%f&lang=ko&m"
         response = requests.get(url, timeout=10)
         response.encoding = 'utf-8'
         return response.text.strip().replace("Â", "")
-    except:
-        return "날씨 정보 확인 불가"
+    except: return "날씨 정보 확인 불가"
 
-# -----------------------------
-# 시장 심리
-# -----------------------------
 async def get_market_sentiment():
+    """시장 위험도 측정 (VIX)"""
     try:
         vix = yf.Ticker("^VIX").history(period="1d")['Close'].iloc[-1]
         if vix >= 20:
-            return f"🚨 VIX {vix:.2f} - 변동성 높음 (주의)"
+            return f"🚨 **VIX {vix:.2f} - 변동성 높음 (주의)**"
         return f"✅ VIX {vix:.2f} - 변동성 낮음 (안정)"
-    except:
-        return "지수 조회 불가"
+    except: return "지수 조회 불가"
 
-# -----------------------------
-# Gemini 요약
-# -----------------------------
 async def get_gemini_summary(title, description):
+    """Gemini AI 3줄 요약"""
     try:
-        if not description:
-            description = "설명 없음"
-
-        prompt = f"""
-경제 유튜브 영상 요약.
-핵심만 3줄, 번호로 정리.
-
-제목: {title}
-설명: {description}
-"""
+        prompt = f"경제 유튜버의 영상이야. 제목과 설명을 보고 핵심을 번호를 매겨 3줄 요약해줘.\n제목: {title}\n설명: {description}"
         response = model.generate_content(prompt)
         return response.text.strip()
-    except:
-        return "요약 실패 (원문 확인)"
+    except: return "AI 요약 생성 중 오류가 발생했습니다."
 
-# -----------------------------
-# 유튜브 최신 영상 (핵심 수정 부분)
-# -----------------------------
 async def get_latest_youtube_brief():
+    """가장 확실한 '업로드 재생목록' 조회 방식을 사용합니다."""
     briefs = []
     now = datetime.now(timezone.utc)
-
+    
     for name, channel_id in YOUTUBE_CHANNELS.items():
         try:
-            url = f"https://www.googleapis.com/youtube/v3/search?key={YOUTUBE_API_KEY}&channelId={channel_id}&part=snippet&order=date&maxResults=3&type=video"
+            # 채널 ID(UC...)를 업로드 목록 ID(UU...)로 변환
+            upload_playlist_id = "UU" + channel_id[2:]
+            
+            # PlaylistItems API를 통해 목록의 가장 첫 번째 영상을 가져옴 (검색보다 훨씬 빠름)
+            url = (
+                f"https://www.googleapis.com/youtube/v3/playlistItems?"
+                f"key={YOUTUBE_API_KEY}&playlistId={upload_playlist_id}&"
+                f"part=snippet,contentDetails&maxResults=1"
+            )
             res = requests.get(url).json()
-
-            for item in res.get('items', []):
+            
+            if 'items' in res and len(res['items']) > 0:
+                item = res['items'][0]
                 pub_at = item['snippet']['publishedAt']
                 pub_time = datetime.strptime(pub_at, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
-
+                
+                # 24시간 이내 영상인지 확인 (시차 고려하여 30시간으로 설정)
                 if now - pub_time <= timedelta(hours=30):
-                    v_id = item['id']['videoId']
+                    v_id = item['contentDetails']['videoId']
                     v_title = item['snippet']['title']
-                    v_desc = item['snippet'].get('description', '')
-                    v_url = f"https://youtu.be/{v_id}"
+                    v_desc = item['snippet']['description']
+                    v_full_url = f"https://youtu.be/{v_id}"
 
                     summary = await get_gemini_summary(v_title, v_desc)
-
-                    briefs.append(
-                        f"📺 **{name} 새 영상**\n"
-                        f"📌 {v_title}\n"
-                        f"{summary}\n"
-                        f"🔗 {v_url}"
-                    )
-                    break
-
+                    briefs.append(f"📺 **{name} 새 영상**\n📌 {v_title}\n{summary}\n🔗 [영상 바로가기]({v_full_url})")
+                    print(f"[{name}] 신규 영상 발견: {v_title}")
+                else:
+                    print(f"[{name}] 최신 영상이 30시간보다 오래됨")
         except Exception as e:
-            print(f"{name} 에러: {e}")
+            print(f"[{name}] 에러 발생: {e}")
             continue
+            
+    return "\n\n".join(briefs) if briefs else "최근 24시간 동안 올라온 새로운 영상 정보가 없습니다."
 
-    return "\n\n".join(briefs) if briefs else "최근 24시간 신규 영상 없음"
-
-# -----------------------------
-# 시장 데이터
-# -----------------------------
 async def get_market_data():
-    indices = {
-        "환율": "KRW=X",
-        "미 국채 10년물": "^TNX",
-        "다우존스": "^DJI",
-        "S&P 500": "^GSPC",
-        "나스닥": "^IXIC"
-    }
-
+    """금융 지표 수집"""
+    indices = {"환율": "KRW=X", "미 국채 10년물": "^TNX", "다우존스": "^DJI", "S&P 500": "^GSPC", "나스닥": "^IXIC"}
     results = {}
-
     for name, ticker in indices.items():
         try:
             t = yf.Ticker(ticker)
             data = t.history(period="5d")
-
             current = data['Close'].iloc[-1]
             prev = data['Close'].iloc[-2]
-
             diff = current - prev
             change_pct = (diff / prev) * 100
-
             mark = "🔺" if diff > 0 else "🔹"
-
-            if "국채" in name:
-                results[name] = f"{current:.2f}% ({mark}{abs(diff):.2f})"
-            elif "환율" in name:
-                results[name] = f"{current:,.2f}원 ({mark}{abs(diff):.2f}원)"
-            else:
-                results[name] = f"{current:,.2f} ({mark}{abs(diff):.2f} / {change_pct:+.2f}%)"
-
-        except:
-            results[name] = "조회 불가"
-
+            if "국채" in name: results[name] = f"{current:.2f}% ({mark}{abs(diff):.2f})"
+            elif "환율" in name: results[name] = f"{current:,.2f}원 ({mark}{abs(diff):.2f}원)"
+            else: results[name] = f"{current:,.2f} ({mark}{abs(diff):.2f} / {change_pct:+.2f}%)"
+        except: results[name] = "조회 불가"
     return results
 
-# -----------------------------
-# 메인 실행
-# -----------------------------
 async def main():
-    if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("토큰 없음")
-        return
-
+    if not TELEGRAM_TOKEN or not CHAT_ID: return
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
-
+    
     weather = await get_weather()
     sentiment = await get_market_sentiment()
-    youtube = await get_latest_youtube_brief()
+    youtube_section = await get_latest_youtube_brief()
     market = await get_market_data()
-
+    
     message = (
         f"☀️ **경제 비서 아침 브리핑**\n\n"
-        f"📍 대구 날씨: `{weather}`\n"
-        f"🧭 시장 위험도: {sentiment}\n"
+        f"📍 **대구 날씨:** `{weather}`\n"
+        f"🧭 **시장 위험도:** {sentiment}\n"
         f"━━━━━━━━━━━━━━\n"
-        f"{youtube}\n"
+        f"{youtube_section}\n"
         f"━━━━━━━━━━━━━━\n"
-        f"💵 금융 지표\n"
-        f"· 환율: `{market.get('환율')}`\n"
-        f"· 미 10년물: `{market.get('미 국채 10년물')}`\n"
+        f"💵 **금융 지표**\n"
+        f"· 환율: `{market.get('환율', '조회 불가')}`\n"
+        f"· 미 10년물 국채금리: `{market.get('미 국채 10년물', '조회 불가')}`\n"
         f"━━━━━━━━━━━━━━\n"
-        f"🇺🇸 미국 증시\n"
-        f"· 다우: `{market.get('다우존스')}`\n"
-        f"· S&P500: `{market.get('S&P 500')}`\n"
-        f"· 나스닥: `{market.get('나스닥')}`\n"
+        f"🇺🇸 **미국 증시 마감**\n"
+        f"· 다우: `{market.get('다우존스', '조회 불가')}`\n"
+        f"· S&P500: `{market.get('S&P 500', '조회 불가')}`\n"
+        f"· 나스닥: `{market.get('나스닥', '조회 불가')}`\n"
         f"━━━━━━━━━━━━━━\n\n"
-        f"오늘도 성공 투자 🍀"
+        f"오늘도 성공적인 투자와 하루 되세요! 🍀"
     )
-
+    
     async with bot:
         await bot.send_message(chat_id=CHAT_ID, text=message, parse_mode='Markdown')
 
-# 실행
 if __name__ == "__main__":
     asyncio.run(main())
