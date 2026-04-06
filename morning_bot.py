@@ -5,7 +5,7 @@ import os
 import requests
 import google.generativeai as genai
 
-# 1. 환경 변수 설정 (GitHub Secrets에서 안전하게 가져오기)
+# 1. 환경 변수 설정
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 CHAT_ID = os.getenv('CHAT_ID')
 YOUTUBE_API_KEY = os.getenv('YOUTUBE_API_KEY')
@@ -15,7 +15,7 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-# 3. 구독할 유튜버 정보 (채널 ID: 수페TV)
+# 3. 수페TV 채널 ID (가장 정확한 고유 ID로 설정)
 YOUTUBE_CHANNELS = {
     "수페TV": "UC38B_9K2LzEunN2y8a80uMw"
 }
@@ -23,7 +23,6 @@ YOUTUBE_CHANNELS = {
 async def get_weather():
     """대구 날씨 조회 (섭씨 온도로 표시)"""
     try:
-        # 끝에 &m을 붙여 섭씨(C)로 강제 지정합니다.
         url = "https://wttr.in/Daegu?format=%C+|+온도:%t+|+체감:%f&lang=ko&m"
         response = requests.get(url, timeout=10)
         response.encoding = 'utf-8'
@@ -58,28 +57,31 @@ async def get_gemini_summary(title, description):
         return "AI 요약 생성 중 오류가 발생했습니다."
 
 async def get_latest_youtube_brief():
-    """채널의 업로드 목록을 직접 조회하여 가장 최신 영상을 가져옵니다."""
+    """가장 최근에 올라온 영상을 검색하여 가져옵니다."""
     briefs = []
     for name, channel_id in YOUTUBE_CHANNELS.items():
         try:
-            # 채널 ID(UC...)를 업로드 재생목록 ID(UU...)로 변환하여 직접 접근
-            upload_playlist_id = "UU" + channel_id[2:]
-            url = f"https://www.googleapis.com/youtube/v3/playlistItems?key={YOUTUBE_API_KEY}&playlistId={upload_playlist_id}&part=snippet&maxResults=1"
+            # 동영상(video) 타입만 최신순으로 1개 검색
+            url = f"https://www.googleapis.com/youtube/v3/search?key={YOUTUBE_API_KEY}&channelId={channel_id}&part=snippet&order=date&maxResults=1&type=video"
             
             res = requests.get(url).json()
-            video = res['items'][0]['snippet']
             
-            v_title = video['title']
-            v_desc = video['description']
-            v_id = video['resourceId']['videoId']
-            v_url = f"https://youtu.be/{v_id}"
-            
-            # Gemini 요약 호출
-            summary = await get_gemini_summary(v_title, v_desc)
-            
-            briefs.append(f"📺 **{name} 최신 영상**\n📌 {v_title}\n{summary}\n🔗 [영상 바로가기]({v_url})")
-        except:
+            if 'items' in res and len(res['items']) > 0:
+                video = res['items'][0]
+                v_title = video['snippet']['title']
+                v_desc = video['snippet']['description']
+                v_id = video['id']['videoId']
+                v_url = f"https://youtu.be/{v_id}"
+                
+                # Gemini 요약 호출
+                summary = await get_gemini_summary(v_title, v_desc)
+                briefs.append(f"📺 **{name} 최신 영상**\n📌 {v_title}\n{summary}\n🔗 [영상 바로가기]({v_url})")
+            else:
+                print(f"{name} 영상을 찾을 수 없습니다. 응답 확인: {res}")
+        except Exception as e:
+            print(f"유튜브 에러 ({name}): {e}")
             continue
+    
     return "\n\n".join(briefs) if briefs else "새로운 영상 정보가 없습니다."
 
 async def get_market_data():
