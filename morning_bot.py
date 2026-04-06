@@ -24,7 +24,6 @@ YOUTUBE_CHANNELS = {
 }
 
 async def get_weather():
-    """대구 날씨 조회"""
     try:
         url = "https://wttr.in/Daegu?format=%C+|+온도:%t+|+체감:%f&lang=ko&m"
         response = requests.get(url, timeout=10)
@@ -33,7 +32,6 @@ async def get_weather():
     except: return "날씨 정보 확인 불가"
 
 async def get_market_sentiment():
-    """시장 위험도 측정 (VIX)"""
     try:
         vix = yf.Ticker("^VIX").history(period="1d")['Close'].iloc[-1]
         if vix >= 20:
@@ -42,39 +40,35 @@ async def get_market_sentiment():
     except: return "지수 조회 불가"
 
 async def get_gemini_summary(title, description):
-    """Gemini AI 3줄 요약"""
     try:
-        prompt = f"경제 유튜버의 영상이야. 제목과 설명을 보고 핵심을 번호를 매겨 3줄 요약해줘.\n제목: {title}\n설명: {description}"
+        prompt = f"경제 유튜버의 영상이야. 핵심 내용을 번호를 매겨 3줄 요약해줘.\n제목: {title}\n설명: {description}"
         response = model.generate_content(prompt)
         return response.text.strip()
     except: return "AI 요약 생성 중 오류가 발생했습니다."
 
 async def get_latest_youtube_brief():
-    """채널의 최신 영상 목록을 직접 확인하여 24시간 이내 영상만 필터링합니다."""
     briefs = []
+    # 서버 시간 차이를 고려하여 넉넉하게 최근 30시간 이내 영상을 체크합니다.
     now = datetime.now(timezone.utc)
     
     for name, channel_id in YOUTUBE_CHANNELS.items():
         try:
-            # search 대신 activities API를 사용하여 채널의 실제 최근 활동(업로드)을 가져옵니다. (더 정확함)
-            url = (
-                f"https://www.googleapis.com/youtube/v3/activities?"
-                f"key={YOUTUBE_API_KEY}&channelId={channel_id}&part=snippet,contentDetails&"
-                f"maxResults=5"
-            )
+            # 채널의 최신 활동(업로드) 가져오기
+            url = f"https://www.googleapis.com/youtube/v3/activities?key={YOUTUBE_API_KEY}&channelId={channel_id}&part=snippet,contentDetails&maxResults=5"
             res = requests.get(url).json()
             
             for item in res.get('items', []):
                 if item['snippet']['type'] == 'upload':
                     pub_at = item['snippet']['publishedAt']
+                    # 유튜브 시간 형식을 파이썬 시간으로 변환
                     pub_time = datetime.strptime(pub_at, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
                     
-                    # 24시간 이내 업로드된 영상인지 확인
-                    if now - pub_time <= timedelta(hours=24):
+                    # 기준을 30시간으로 살짝 넓혀서 시차 오류를 방지합니다.
+                    if now - pub_time <= timedelta(hours=30):
                         v_id = item['contentDetails']['upload']['videoId']
                         v_title = item['snippet']['title']
                         
-                        # 상세 설명 가져오기
+                        # 영상 상세 정보 가져오기
                         v_detail_url = f"https://www.googleapis.com/youtube/v3/videos?key={YOUTUBE_API_KEY}&id={v_id}&part=snippet"
                         v_info = requests.get(v_detail_url).json()
                         v_desc = v_info['items'][0]['snippet']['description']
@@ -82,14 +76,14 @@ async def get_latest_youtube_brief():
 
                         summary = await get_gemini_summary(v_title, v_desc)
                         briefs.append(f"📺 **{name} 새 영상**\n📌 {v_title}\n{summary}\n🔗 [영상 바로가기]({v_full_url})")
-                        break # 각 채널당 가장 최근 1개만
-        except:
+                        break 
+        except Exception as e:
+            print(f"{name} 에러: {e}")
             continue
             
     return "\n\n".join(briefs) if briefs else "최근 24시간 동안 올라온 새로운 영상 정보가 없습니다."
 
 async def get_market_data():
-    """금융 지표 수집"""
     indices = {"환율": "KRW=X", "미 국채 10년물": "^TNX", "다우존스": "^DJI", "S&P 500": "^GSPC", "나스닥": "^IXIC"}
     results = {}
     for name, ticker in indices.items():
