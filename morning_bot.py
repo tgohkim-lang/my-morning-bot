@@ -16,7 +16,7 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-# 3. 구독 채널 목록
+# 3. 구독 채널 목록 (YouTube 채널 ID)
 YOUTUBE_CHANNELS = {
     "수페TV": "UC38B_9K2LzEunN2y8a80uMw",
     "서대리TV": "UCtQkxwZkrruYdy2bVNNW-Rw",
@@ -40,10 +40,19 @@ async def get_market_sentiment():
 
 async def get_gemini_summary(title, description):
     try:
-        prompt = f"경제 유튜버 영상 요약해줘.\n제목: {title}\n설명: {description}"
+        prompt = f"다음 경제 영상의 내용을 핵심만 3줄 요약해줘.\n제목: {title}\n설명: {description}"
         response = model.generate_content(prompt)
         return response.text.strip()
-    except: return "요약 생성 실패"
+    except: return "AI 요약 생성 실패"
+
+async def get_upload_playlist_id(channel_id):
+    """채널 ID로부터 업로드 플레이리스트 ID를 직접 가져옵니다."""
+    try:
+        url = f"https://www.googleapis.com/youtube/v3/channels?id={channel_id}&part=contentDetails&key={YOUTUBE_API_KEY}"
+        res = requests.get(url).json()
+        return res['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+    except:
+        return "UU" + channel_id[2:] # 실패 시 기본 규칙 적용
 
 async def get_youtube_content():
     briefs = []
@@ -52,8 +61,8 @@ async def get_youtube_content():
     
     for name, ch_id in YOUTUBE_CHANNELS.items():
         try:
-            # 업로드 목록 ID (UC -> UU)
-            playlist_id = "UU" + ch_id[2:]
+            # 업로드 ID 직접 조회 (에러 방지 핵심)
+            playlist_id = await get_upload_playlist_id(ch_id)
             url = f"https://www.googleapis.com/youtube/v3/playlistItems?key={YOUTUBE_API_KEY}&playlistId={playlist_id}&part=snippet,contentDetails&maxResults=2"
             res = requests.get(url).json()
             
@@ -65,6 +74,7 @@ async def get_youtube_content():
                 pub_at = item['snippet']['publishedAt']
                 pub_time = datetime.strptime(pub_at, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
                 
+                # 36시간 이내 영상만 포함
                 if now - pub_time <= timedelta(hours=36):
                     v_id = item['contentDetails']['videoId']
                     v_title = item['snippet']['title']
@@ -73,32 +83,42 @@ async def get_youtube_content():
                     briefs.append(f"📺 **{name}**\n📌 {v_title}\n{summary}\n🔗 https://youtu.be/{v_id}")
                     break
         except Exception as e:
-            logs.append(f"⚠️ {name} 에러: {str(e)}")
+            logs.append(f"⚠️ {name} 시스템 오류: {str(e)}")
             
-    youtube_text = "\n\n".join(briefs) if briefs else "최근 올라온 영상이 없습니다."
+    youtube_text = "\n\n".join(briefs) if briefs else "최근 올라온 새 영상 정보가 없습니다."
     if logs:
         youtube_text += "\n\n🔍 **로그:**\n" + "\n".join(logs)
     return youtube_text
 
 async def get_market_data():
-    indices = {"환율": "KRW=X", "국채10년": "^TNX", "다우": "^DJI", "S&P 500": "^GSPC", "나스닥": "^IXIC"}
+    # 지표 리스트 (국채금리 ^TNX 포함)
+    indices = {"환율": "KRW=X", "국채10년": "^TNX", "다우": "^DJI", "S&P500": "^GSPC", "나스닥": "^IXIC"}
     res = {}
     for name, ticker in indices.items():
         try:
-            data = yf.Ticker(ticker).history(period="2d")
+            data = yf.Ticker(ticker).history(period="5d")
+            if data.empty:
+                res[name] = "N/A"
+                continue
             curr = data['Close'].iloc[-1]
             prev = data['Close'].iloc[-2]
             diff = curr - prev
             mark = "🔺" if diff > 0 else "🔹"
-            res[name] = f"{curr:,.2f}({mark}{abs(diff):.2f})"
-        except: res[name] = "N/A"
+            
+            if name == "국채10년":
+                res[name] = f"{curr:.2f}% ({mark}{abs(diff):.2f})"
+            elif name == "환율":
+                res[name] = f"{curr:,.2f}원 ({mark}{abs(diff):.2f})"
+            else:
+                res[name] = f"{curr:,.2f} ({mark}{abs(diff):.2f})"
+        except: res[name] = "조회 실패"
     return res
 
 async def main():
     if not TELEGRAM_TOKEN or not CHAT_ID: return
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     
-    # 순차적으로 실행하여 오류 방지
+    # 데이터 수집
     weather = await get_weather()
     vix = await get_market_sentiment()
     market = await get_market_data()
@@ -112,12 +132,15 @@ async def main():
         f"{youtube_section}\n"
         f"━━━━━━━━━━━━━━\n"
         f"💵 **금융 지표**\n"
-        f"· 환율: `{market['환율']}원` / 국채금리: `{market['국채10년']}%`\n"
-        f"· 다우: `{market['다우']}`\n"
-        f"· **S&P 500:** `{market['S&P 500']}`\n"
-        f"· 나스닥: `{market['나스닥']}`\n"
+        f"· 환율: `{market.get('환율', 'N/A')}`\n"
+        f"· 국채 10년: `{market.get('국채10년', 'N/A')}`\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"🇺🇸 **미국 증시 마감**\n"
+        f"· 다우: `{market.get('다우', 'N/A')}`\n"
+        f"· **S&P 500:** `{market.get('S&P500', 'N/A')}`\n"
+        f"· 나스닥: `{market.get('나스닥', 'N/A')}`\n"
         f"━━━━━━━━━━━━━━\n\n"
-        f"성공적인 하루 되세요! 🍀"
+        f"오늘도 성투하세요! 🍀"
     )
     
     async with bot:
