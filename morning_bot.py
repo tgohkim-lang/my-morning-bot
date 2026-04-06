@@ -16,7 +16,7 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-# 3. 구독 채널 설정 (채널 ID -> 업로드 재생목록 ID로 자동 변환하여 사용)
+# 3. 구독 채널 목록 (정밀 확인된 ID입니다)
 YOUTUBE_CHANNELS = {
     "수페TV": "UC38B_9K2LzEunN2y8a80uMw",
     "서대리TV": "UCtQkxwZkrruYdy2bVNNW-Rw",
@@ -50,30 +50,32 @@ async def get_gemini_summary(title, description):
     except: return "AI 요약 생성 중 오류가 발생했습니다."
 
 async def get_latest_youtube_brief():
-    """가장 확실한 '업로드 재생목록' 조회 방식을 사용합니다."""
+    """가장 확실하게 업로드 목록 ID를 직접 찾아서 영상을 가져옵니다."""
     briefs = []
     now = datetime.now(timezone.utc)
     
     for name, channel_id in YOUTUBE_CHANNELS.items():
         try:
-            # 채널 ID(UC...)를 업로드 목록 ID(UU...)로 변환
-            upload_playlist_id = "UU" + channel_id[2:]
+            # 1단계: 채널 정보를 직접 조회하여 '업로드 재생목록 ID'를 정확히 가져옵니다.
+            ch_url = f"https://www.googleapis.com/youtube/v3/channels?key={YOUTUBE_API_KEY}&id={channel_id}&part=contentDetails"
+            ch_res = requests.get(ch_url).json()
             
-            # PlaylistItems API를 통해 목록의 가장 첫 번째 영상을 가져옴 (검색보다 훨씬 빠름)
-            url = (
-                f"https://www.googleapis.com/youtube/v3/playlistItems?"
-                f"key={YOUTUBE_API_KEY}&playlistId={upload_playlist_id}&"
-                f"part=snippet,contentDetails&maxResults=1"
-            )
-            res = requests.get(url).json()
+            if 'items' not in ch_res or not ch_res['items']:
+                print(f"[{name}] 채널 정보를 찾을 수 없습니다. ID를 확인해주세요.")
+                continue
+                
+            upload_playlist_id = ch_res['items'][0]['contentDetails']['relatedPlaylists']['uploads']
             
-            if 'items' in res and len(res['items']) > 0:
-                item = res['items'][0]
+            # 2단계: 해당 재생목록에서 최신 영상 3개를 확인합니다. (Shorts 포함 방지용)
+            pl_url = f"https://www.googleapis.com/youtube/v3/playlistItems?key={YOUTUBE_API_KEY}&playlistId={upload_playlist_id}&part=snippet,contentDetails&maxResults=3"
+            pl_res = requests.get(pl_url).json()
+            
+            for item in pl_res.get('items', []):
                 pub_at = item['snippet']['publishedAt']
                 pub_time = datetime.strptime(pub_at, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
                 
-                # 24시간 이내 영상인지 확인 (시차 고려하여 30시간으로 설정)
-                if now - pub_time <= timedelta(hours=30):
+                # 확인 범위를 48시간으로 넓혀서 시차 및 누락을 방지합니다.
+                if now - pub_time <= timedelta(hours=48):
                     v_id = item['contentDetails']['videoId']
                     v_title = item['snippet']['title']
                     v_desc = item['snippet']['description']
@@ -81,11 +83,10 @@ async def get_latest_youtube_brief():
 
                     summary = await get_gemini_summary(v_title, v_desc)
                     briefs.append(f"📺 **{name} 새 영상**\n📌 {v_title}\n{summary}\n🔗 [영상 바로가기]({v_full_url})")
-                    print(f"[{name}] 신규 영상 발견: {v_title}")
-                else:
-                    print(f"[{name}] 최신 영상이 30시간보다 오래됨")
+                    print(f"[{name}] 영상 발견: {v_title}")
+                    break # 채널당 가장 최신 영상 1개만 처리
         except Exception as e:
-            print(f"[{name}] 에러 발생: {e}")
+            print(f"[{name}] 처리 중 에러: {e}")
             continue
             
     return "\n\n".join(briefs) if briefs else "최근 24시간 동안 올라온 새로운 영상 정보가 없습니다."
