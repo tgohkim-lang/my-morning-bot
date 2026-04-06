@@ -16,9 +16,10 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-# 3. 구독할 채널 ID (수페TV)
+# 3. 구독할 채널 목록 (수페TV & 서대리TV 추가)
 YOUTUBE_CHANNELS = {
-    "수페TV": "UC38B_9K2LzEunN2y8a80uMw"
+    "수페TV": "UC38B_9K2LzEunN2y8a80uMw",
+    "서대리TV": "UCtQkxwZkrruYdy2bVNNW-Rw"
 }
 
 async def get_weather():
@@ -42,20 +43,20 @@ async def get_market_sentiment():
 async def get_gemini_summary(title, description):
     """Gemini AI 3줄 요약"""
     try:
-        prompt = f"경제 유튜버의 영상이야. 제목과 설명을 보고 바쁜 직장인을 위해 핵심을 번호를 매겨 3줄 요약해줘.\n제목: {title}\n설명: {description}"
+        prompt = f"경제 유튜버의 영상이야. 제목과 설명을 보고 핵심을 번호를 매겨 3줄 요약해줘.\n제목: {title}\n설명: {description}"
         response = model.generate_content(prompt)
         return response.text.strip()
     except: return "AI 요약 생성 중 오류가 발생했습니다."
 
 async def get_latest_youtube_brief():
-    """봇 실행 시점 기준, 최근 24시간 이내에 올라온 영상만 요약합니다."""
+    """최근 24시간 이내의 영상을 각 채널별로 확인하여 요약합니다."""
     briefs = []
-    # 현재 시간 기준 24시간 전 시간 구하기 (RFC 3339 형식)
+    # 봇 실행 시점 기준 24시간 전 (UTC 기준)
     time_threshold = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
 
     for name, channel_id in YOUTUBE_CHANNELS.items():
         try:
-            # publishedAfter 파라미터를 사용하여 최근 24시간 이내 영상만 검색
+            # 최근 24시간 이내 영상 1개 검색
             search_url = (
                 f"https://www.googleapis.com/youtube/v3/search?"
                 f"key={YOUTUBE_API_KEY}&channelId={channel_id}&part=snippet&"
@@ -68,19 +69,16 @@ async def get_latest_youtube_brief():
                 v_id = video['id']['videoId']
                 v_title = video['snippet']['title']
                 
-                # 영상 상세 설명 가져오기
+                # 영상 상세 정보(설명란) 가져오기
                 video_url = f"https://www.googleapis.com/youtube/v3/videos?key={YOUTUBE_API_KEY}&id={v_id}&part=snippet"
                 video_res = requests.get(video_url).json()
                 v_desc = video_res['items'][0]['snippet']['description']
                 v_full_url = f"https://youtu.be/{v_id}"
 
                 summary = await get_gemini_summary(v_title, v_desc)
-                briefs.append(f"📺 **{name} 따끈따끈한 새 영상**\n📌 {v_title}\n{summary}\n🔗 [영상 바로가기]({v_full_url})")
-            else:
-                # 24시간 이내 영상이 없는 경우
-                continue
+                briefs.append(f"📺 **{name} 새 영상**\n📌 {v_title}\n{summary}\n🔗 [영상 바로가기]({v_full_url})")
         except Exception as e:
-            print(f"유튜브 에러: {e}")
+            print(f"{name} 검색 중 에러: {e}")
             continue
             
     return "\n\n".join(briefs) if briefs else "최근 24시간 동안 올라온 새로운 영상 정보가 없습니다."
@@ -133,7 +131,4 @@ async def main():
     )
     
     async with bot:
-        await bot.send_message(chat_id=CHAT_ID, text=message, parse_mode='Markdown')
-
-if __name__ == "__main__":
-    asyncio.run(main())
+        await
