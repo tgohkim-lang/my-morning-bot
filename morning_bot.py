@@ -3,11 +3,12 @@ import telegram
 import asyncio
 import requests
 import os
+import pandas as pd
 from datetime import datetime
 
-# GitHub Secrets 설정 (또는 직접 입력)
-TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN') or '본인의_토큰'
-CHAT_ID = os.environ.get('CHAT_ID') or '본인의_ID'
+# GitHub Secrets
+TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
+CHAT_ID = os.environ.get('CHAT_ID')
 
 async def get_weather():
     try:
@@ -27,39 +28,41 @@ async def get_market_data():
         "VIX": "^VIX"
     }
     res = {}
+    
     for name, ticker in indices.items():
         try:
-            # 5일치 데이터를 가져와서 가장 최신(마지막) 2개를 비교합니다.
-            data = yf.Ticker(ticker).history(period="5d")
+            # 데이터를 7일치 넉넉히 가져옵니다.
+            df = yf.download(ticker, period="7d", progress=False)
             
-            if len(data) >= 2:
-                curr = data['Close'].iloc[-1]
-                prev = data['Close'].iloc[-2]
+            if not df.empty and len(df) >= 2:
+                # 최신 데이터 2개를 선택 (NaN 값 제거 후 마지막 2개)
+                valid_data = df['Close'].dropna()
                 
-                # 만약 수치가 nan이면 그 이전 데이터를 탐색
-                if any(map(lambda x: str(x).lower() == 'nan', [curr, prev])):
-                    res[name] = "장 휴무"
-                    continue
-
-                diff = curr - prev
-                mark = "🔺" if diff > 0 else "🔹"
-                
-                if name == "국채10년":
-                    res[name] = f"{curr:.2f}%({mark}{abs(diff):.2f})"
-                elif name == "환율":
-                    res[name] = f"{curr:,.2f}원({mark}{abs(diff):.2f})"
-                elif name == "VIX":
-                    res[name] = f"{curr:.2f}"
+                if len(valid_data) >= 2:
+                    curr = float(valid_data.iloc[-1])
+                    prev = float(valid_data.iloc[-2])
+                    
+                    diff = curr - prev
+                    mark = "🔺" if diff > 0 else "🔹"
+                    
+                    if name == "국채10년":
+                        res[name] = f"{curr:.2f}%({mark}{abs(diff):.2f})"
+                    elif name == "환율":
+                        res[name] = f"{curr:,.2f}원({mark}{abs(diff):.2f})"
+                    elif name == "VIX":
+                        res[name] = f"{curr:.2f}"
+                    else:
+                        res[name] = f"{curr:,.2f}({mark}{abs(diff):.2f})"
                 else:
-                    res[name] = f"{curr:,.2f}({mark}{abs(diff):.2f})"
+                    res[name] = "업데이트 중"
             else:
-                res[name] = "확인중"
+                res[name] = "데이터 확인 불가"
         except:
             res[name] = "N/A"
     return res
 
 async def main():
-    print("🚀 경제 지표 수집 시작...")
+    print("🚀 시장 데이터 정밀 수집 시작...")
     weather = await get_weather()
     market = await get_market_data()
     
@@ -79,14 +82,14 @@ async def main():
            f"오늘도 화이팅! 🍀")
 
     if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("❌ 토큰 설정 오류")
+        print("❌ 설정 오류: Secrets를 확인하세요.")
         return
 
     try:
         bot = telegram.Bot(token=TELEGRAM_TOKEN)
         async with bot:
             await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode='Markdown')
-        print("✅ 전송 성공!")
+        print("✅ 브리핑 전송 성공!")
     except Exception as e:
         print(f"❌ 전송 실패: {e}")
 
