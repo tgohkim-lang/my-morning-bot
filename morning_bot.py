@@ -14,15 +14,21 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 
 # 2. Gemini AI 설정
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+    except Exception as e:
+        print(f"Gemini 설정 실패: {e}")
+        model = None
+else:
+    model = None
 
 # 3. 구독할 채널 ID (수페TV)
 YOUTUBE_CHANNELS = {
     "수페TV": "UC38B_9K2LzEunN2y8a80uMw"
 }
 
-async def get_weather():
+def get_weather():
     """대구 날씨 조회 (섭씨)"""
     try:
         url = "https://wttr.in/Daegu?format=%C+|+온도:%t+|+체감:%f&lang=ko&m"
@@ -32,26 +38,29 @@ async def get_weather():
     except Exception: 
         return "날씨 정보 확인 불가"
 
-async def get_market_sentiment():
+def get_market_sentiment():
     """시장 위험도 측정 (VIX)"""
     try:
-        vix = yf.Ticker("^VIX").history(period="1d")['Close'].iloc[-1]
+        vix = yf.Ticker("^VIX").history(period="5d")['Close'].iloc[-1]
         if vix >= 20:
             return f"🚨 **VIX {vix:.2f} - 변동성 높음 (주의)**"
         return f"✅ VIX {vix:.2f} - 변동성 낮음 (안정)"
     except Exception: 
         return "지수 조회 불가"
 
-async def get_gemini_summary(title, description):
+def get_gemini_summary(title, description):
     """Gemini AI 3줄 요약"""
+    if not model:
+        return "AI 요약 사용 불가"
     try:
         prompt = f"경제 유튜버의 영상이야. 제목과 설명을 보고 바쁜 직장인을 위해 핵심을 번호를 매겨 3줄 요약해줘.\n제목: {title}\n설명: {description}"
         response = model.generate_content(prompt)
         return response.text.strip()
-    except Exception: 
+    except Exception as e: 
+        print(f"Gemini 요약 에러: {e}")
         return "AI 요약 생성 중 오류가 발생했습니다."
 
-async def get_latest_youtube_brief():
+def get_latest_youtube_brief():
     """최근 24시간 이내 영상만 요약"""
     briefs = []
     time_threshold = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
@@ -75,7 +84,7 @@ async def get_latest_youtube_brief():
                 v_desc = video_res['items'][0]['snippet']['description']
                 v_full_url = f"https://youtu.be/{v_id}"
 
-                summary = await get_gemini_summary(v_title, v_desc)
+                summary = get_gemini_summary(v_title, v_desc)
                 briefs.append(f"📺 **{name} 따끈따끈한 새 영상**\n📌 {v_title}\n{summary}\n🔗 [영상 바로가기]({v_full_url})")
             else:
                 continue
@@ -85,8 +94,8 @@ async def get_latest_youtube_brief():
             
     return "\n\n".join(briefs) if briefs else "최근 24시간 동안 올라온 새로운 영상 정보가 없습니다."
 
-async def get_market_data():
-    """금융 지표 및 엔화/엔화 선물 데이터 수집 (안정성 강화)"""
+def get_market_data():
+    """금융 지표 및 엔화/엔화 선물 데이터 수집"""
     indices = {
         "달러/원": "KRW=X",
         "엔/원(100엔)": "JPYKRW=X",
@@ -136,15 +145,9 @@ async def main():
         
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     
-    weather = await get_weather()
-    sentiment = await get_market_sentiment()
-    youtube_section = await get_latest_youtube_brief()
-    market = await get_market_data()
+    weather = get_weather()
+    sentiment = get_market_sentiment()
+    youtube_section = get_latest_youtube_brief()
+    market = get_market_data()
     
     message = (
-        f"☀️ **경제 비서 아침 브리핑**\n\n"
-        f"📍 **대구 날씨:** `{weather}`\n"
-        f"🧭 **시장 위험도:** {sentiment}\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"💴 **엔화 및 환율 정보**\n"
-        f"· 1
