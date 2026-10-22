@@ -17,8 +17,7 @@ if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
         model = genai.GenerativeModel('gemini-1.5-flash')
-    except Exception as e:
-        print(f"Gemini 설정 실패: {e}")
+    except Exception:
         model = None
 else:
     model = None
@@ -56,8 +55,7 @@ def get_gemini_summary(title, description):
         prompt = f"경제 유튜버의 영상이야. 제목과 설명을 보고 바쁜 직장인을 위해 핵심을 번호를 매겨 3줄 요약해줘.\n제목: {title}\n설명: {description}"
         response = model.generate_content(prompt)
         return response.text.strip()
-    except Exception as e: 
-        print(f"Gemini 요약 에러: {e}")
+    except Exception: 
         return "AI 요약 생성 중 오류가 발생했습니다."
 
 def get_latest_youtube_brief():
@@ -88,8 +86,7 @@ def get_latest_youtube_brief():
                 briefs.append(f"📺 **{name} 따끈따끈한 새 영상**\n📌 {v_title}\n{summary}\n🔗 [영상 바로가기]({v_full_url})")
             else:
                 continue
-        except Exception as e:
-            print(f"유튜브 에러: {e}")
+        except Exception:
             continue
             
     return "\n\n".join(briefs) if briefs else "최근 24시간 동안 올라온 새로운 영상 정보가 없습니다."
@@ -132,15 +129,13 @@ def get_market_data():
                 results[name] = f"{current:,.2f}원 ({mark}{abs(diff):.2f}원)"
             else:
                 results[name] = f"{current:,.2f} ({mark}{abs(diff):.2f} / {change_pct:+.2f}%)"
-        except Exception as e:
-            print(f"지표 불러오기 에러 ({name}): {e}")
+        except Exception:
             results[name] = "조회 불가"
             
     return results
 
 async def main():
     if not TELEGRAM_TOKEN or not CHAT_ID: 
-        print("토큰이나 CHAT_ID 설정이 누락되었습니다.")
         return
         
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
@@ -151,3 +146,30 @@ async def main():
     market = get_market_data()
     
     message = (
+        f"☀️ **경제 비서 아침 브리핑**\n\n"
+        f"📍 **대구 날씨:** `{weather}`\n"
+        f"🧭 **시장 위험도:** {sentiment}\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"💴 **엔화 및 환율 정보**\n"
+        f"· 100엔 환율: `{market.get('엔/원(100엔)', '조회 불가')}`\n"
+        f"· 엔화 선물(6J=F): `{market.get('엔화 선물', '조회 불가')}`\n"
+        f"· 달러/원 환율: `{market.get('달러/원', '조회 불가')}`\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"{youtube_section}\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"💵 **주요 금융 지표**\n"
+        f"· 미 10년물 국채금리: `{market.get('미 국채 10년물', '조회 불가')}`\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"🇺🇸 **미국 증시 마감**\n"
+        f"· 다우: `{market.get('다우존스', '조회 불가')}`\n"
+        f"· S&P500: `{market.get('S&P 500', '조회 불가')}`\n"
+        f"· 나스닥: `{market.get('나스닥', '조회 불가')}`\n"
+        f"━━━━━━━━━━━━━━\n\n"
+        f"오늘도 성공적인 투자와 하루 되세요! 🍀"
+    )
+    
+    async with bot:
+        await bot.send_message(chat_id=CHAT_ID, text=message, parse_mode='Markdown')
+
+if __name__ == "__main__":
+    asyncio.run(main())
