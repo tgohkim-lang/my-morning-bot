@@ -1,3 +1,5 @@
-yfinance
 python-telegram-bot
 requests
+yfinance
+google-generativeai
+pandas
