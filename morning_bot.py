@@ -13,8 +13,9 @@ YOUTUBE_API_KEY = os.getenv('YOUTUBE_API_KEY')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 
 # 2. Gemini AI 설정
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel('gemini-1.5-flash')
 
 # 3. 구독할 채널 ID (수페TV)
 YOUTUBE_CHANNELS = {
@@ -28,7 +29,7 @@ async def get_weather():
         response = requests.get(url, timeout=10)
         response.encoding = 'utf-8'
         return response.text.strip().replace("Â", "")
-    except: 
+    except Exception: 
         return "날씨 정보 확인 불가"
 
 async def get_market_sentiment():
@@ -38,7 +39,7 @@ async def get_market_sentiment():
         if vix >= 20:
             return f"🚨 **VIX {vix:.2f} - 변동성 높음 (주의)**"
         return f"✅ VIX {vix:.2f} - 변동성 낮음 (안정)"
-    except: 
+    except Exception: 
         return "지수 조회 불가"
 
 async def get_gemini_summary(title, description):
@@ -47,7 +48,7 @@ async def get_gemini_summary(title, description):
         prompt = f"경제 유튜버의 영상이야. 제목과 설명을 보고 바쁜 직장인을 위해 핵심을 번호를 매겨 3줄 요약해줘.\n제목: {title}\n설명: {description}"
         response = model.generate_content(prompt)
         return response.text.strip()
-    except: 
+    except Exception: 
         return "AI 요약 생성 중 오류가 발생했습니다."
 
 async def get_latest_youtube_brief():
@@ -85,7 +86,7 @@ async def get_latest_youtube_brief():
     return "\n\n".join(briefs) if briefs else "최근 24시간 동안 올라온 새로운 영상 정보가 없습니다."
 
 async def get_market_data():
-    """금융 지표 및 엔화/엔화 선물 데이터 수집"""
+    """금융 지표 및 엔화/엔화 선물 데이터 수집 (안정성 강화)"""
     indices = {
         "달러/원": "KRW=X",
         "엔/원(100엔)": "JPYKRW=X",
@@ -99,20 +100,22 @@ async def get_market_data():
     for name, ticker in indices.items():
         try:
             t = yf.Ticker(ticker)
-            data = t.history(period="5d")
-            current = data['Close'].iloc[-1]
-            prev = data['Close'].iloc[-2]
+            data = t.history(period="1mo")
+            if data.empty or len(data) < 2:
+                results[name] = "조회 불가"
+                continue
+
+            current = float(data['Close'].iloc[-1])
+            prev = float(data['Close'].iloc[-2])
             diff = current - prev
             change_pct = (diff / prev) * 100
             mark = "🔺" if diff > 0 else "🔹"
             
             if name == "엔/원(100엔)":
-                # Yahoo Finance의 JPYKRW=X는 1엔당 원화 가격이므로 100을 곱해 100엔 기준으로 표기
                 jpy_100 = current * 100
                 diff_100 = diff * 100
                 results[name] = f"{jpy_100:,.2f}원 ({mark}{abs(diff_100):.2f}원)"
             elif name == "엔화 선물":
-                # CME 엔화 선물(6J=F) 지표
                 results[name] = f"{current:.6f} ({mark}{abs(diff):.6f} / {change_pct:+.2f}%)"
             elif "국채" in name:
                 results[name] = f"{current:.2f}% ({mark}{abs(diff):.2f})"
@@ -120,13 +123,17 @@ async def get_market_data():
                 results[name] = f"{current:,.2f}원 ({mark}{abs(diff):.2f}원)"
             else:
                 results[name] = f"{current:,.2f} ({mark}{abs(diff):.2f} / {change_pct:+.2f}%)"
-        except:
+        except Exception as e:
+            print(f"지표 불러오기 에러 ({name}): {e}")
             results[name] = "조회 불가"
+            
     return results
 
 async def main():
     if not TELEGRAM_TOKEN or not CHAT_ID: 
+        print("토큰이나 CHAT_ID 설정이 누락되었습니다.")
         return
+        
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     
     weather = await get_weather()
@@ -140,25 +147,4 @@ async def main():
         f"🧭 **시장 위험도:** {sentiment}\n"
         f"━━━━━━━━━━━━━━\n"
         f"💴 **엔화 및 환율 정보**\n"
-        f"· 100엔 환율: `{market['엔/원(100엔)']}`\n"
-        f"· 엔화 선물(6J=F): `{market['엔화 선물']}`\n"
-        f"· 달러/원 환율: `{market['달러/원']}`\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"{youtube_section}\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"💵 **주요 금융 지표**\n"
-        f"· 미 10년물 국채금리: `{market['미 국채 10년물']}`\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"🇺🇸 **미국 증시 마감**\n"
-        f"· 다우: `{market['다우존스']}`\n"
-        f"· S&P500: `{market['S&P 500']}`\n"
-        f"· 나스닥: `{market['나스닥']}`\n"
-        f"━━━━━━━━━━━━━━\n\n"
-        f"오늘도 성공적인 투자와 하루 되세요! 🍀"
-    )
-    
-    async with bot:
-        await bot.send_message(chat_id=CHAT_ID, text=message, parse_mode='Markdown')
-
-if __name__ == "__main__":
-    asyncio.run(main())
+        f"· 1
